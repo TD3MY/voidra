@@ -141,7 +141,7 @@
                         
                     } catch (err) {
                         console.error("Error sending audio:", err);
-                        alert("ارتباط با سرور برقرار نشد. اینترنت و آدرس رندر رو چک کن.");
+                        alert("خطای شبکه یا سرور: " + err.message);
                     }
                     
                     document.body.classList.remove('state-thinking');
