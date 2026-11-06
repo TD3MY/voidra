@@ -8,14 +8,13 @@
         body {
             margin: 0;
             padding: 0;
-            background-color: #050505;
+            background-color: #0a0a0a; /* پس زمینه تیره */
             overflow: hidden;
             display: flex;
             justify-content: center;
             align-items: center;
             height: 100vh;
             font-family: monospace;
-            color: #00ffff;
         }
 
         #tap-screen {
@@ -27,55 +26,49 @@
             align-items: center;
             z-index: 10;
             font-size: 1.2rem;
+            color: #00ffff;
             text-align: center;
             letter-spacing: 2px;
             animation: pulseText 2s infinite;
         }
 
-        .eye-container {
-            position: relative;
-            width: 200px;
+        /* کانتینر صورت (مثل صفحه نمایش EMO) */
+        .face-container {
+            width: 250px;
             height: 200px;
-            border-radius: 50%;
-            background: radial-gradient(circle, rgba(0,255,255,0.4) 0%, rgba(0,255,255,0) 70%);
-            box-shadow: 0 0 50px rgba(0,255,255,0.5), inset 0 0 20px rgba(0,255,255,0.8);
+            background-color: #000;
+            border-radius: 40px; /* گوشه های گرد صفحه */
+            border: 8px solid #222; /* حاشیه */
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 30px; /* فاصله بین دو چشم */
+            box-shadow: 0 0 50px rgba(0,255,255,0.1);
             transition: all 0.3s ease;
         }
 
-        .eye-core {
-            position: absolute;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            width: 60px;
+        /* هر چشم */
+        .eye {
+            width: 50px;
             height: 60px;
-            border-radius: 50%;
-            background: #ffffff;
-            box-shadow: 0 0 20px #ffffff, 0 0 40px #00ffff;
+            background-color: #00ffff; /* رنگ فیروزه ای EMO */
+            border-radius: 15px; /* گوشه های گرد چشم */
+            box-shadow: 0 0 20px #00ffff;
             transition: all 0.1s ease;
         }
 
-        .state-listening .eye-container {
-            box-shadow: 0 0 80px rgba(0,255,255,1), inset 0 0 40px rgba(0,255,255,1);
-            transform: scale(1.1);
-        }
-        .state-listening .eye-core {
-            width: 80px;
-            height: 80px;
-            background: #00ffff;
+        /* حالت گوش دادن (چشم ها بزرگتر میشن) */
+        .state-listening .eye {
+            height: 70px;
+            box-shadow: 0 0 30px #00ffff, 0 0 50px #00ffff;
         }
 
-        .state-thinking .eye-container {
-            animation: rotate 2s linear infinite;
-            box-shadow: 0 0 80px rgba(255,0,255,1), inset 0 0 40px rgba(255,0,255,1);
-        }
-        .state-thinking .eye-core {
-            background: #ff00ff;
-        }
-
-        @keyframes rotate {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        /* حالت فکر کردن (چشم ها باریک میشن) */
+        .state-thinking .eye {
+            height: 15px;
+            margin-top: 20px;
+            box-shadow: 0 0 10px #ff00ff;
+            background-color: #ff00ff;
         }
 
         @keyframes pulseText {
@@ -88,14 +81,66 @@
 
     <div id="tap-screen">Touch the screen to wake me up</div>
 
-    <div class="eye-container" id="eye">
-        <div class="eye-core"></div>
+    <div class="face-container" id="face">
+        <div class="eye" id="eye-left"></div>
+        <div class="eye" id="eye-right"></div>
     </div>
 
     <script>
-        document.getElementById('tap-screen').addEventListener('click', () => {
+        const face = document.getElementById('face');
+        const eyeLeft = document.getElementById('eye-left');
+        const eyeRight = document.getElementById('eye-right');
+        
+        let audioContext;
+        let analyser;
+        let microphone;
+        let isListening = false;
+
+        document.getElementById('tap-screen').addEventListener('click', async () => {
             document.getElementById('tap-screen').style.display = 'none';
             document.body.classList.add('state-listening');
+
+            try {
+                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                analyser = audioContext.createAnalyser();
+                microphone = audioContext.createMediaStreamSource(stream);
+                microphone.connect(analyser);
+                
+                analyser.fftSize = 256;
+                const dataArray = new Uint8Array(analyser.frequencyBinCount);
+                
+                isListening = true;
+
+                function checkVolume() {
+                    if (!isListening) return;
+                    
+                    analyser.getByteFrequencyData(dataArray);
+                    let sum = 0;
+                    for (let i = 0; i < dataArray.length; i++) {
+                        sum += dataArray[i];
+                    }
+                    let average = sum / dataArray.length;
+
+                    // واکنش چشم ها به صدا (بزرگ و کوچیک شدن)
+                    if (average > 20) {
+                        const scaleY = 1 + (average / 60); 
+                        const scaleX = 1 + (average / 200);
+                        eyeLeft.style.transform = `scale(${scaleX}, ${scaleY})`;
+                        eyeRight.style.transform = `scale(${scaleX}, ${scaleY})`;
+                    } else {
+                        eyeLeft.style.transform = `scale(1)`;
+                        eyeRight.style.transform = `scale(1)`;
+                    }
+
+                    requestAnimationFrame(checkVolume);
+                }
+
+                checkVolume();
+            } catch (err) {
+                console.error("Microphone access denied:", err);
+                alert("برای استفاده از این قابلیت، باید به میکروفون دسترسی بدی!");
+            }
         });
     </script>
 
