@@ -189,19 +189,15 @@
             return '';
         }
 
-                function speak(text) {
+                        function speak(text) {
             return new Promise(resolve => {
                 if (muted || !window.speechSynthesis || !text) return resolve();
                 const u = new SpeechSynthesisUtterance(text);
                 
+                // اگر متن شامل حروف فارسی بود، زبان رو فارسی تنظیم کن
                 const isPersian = /[\u0600-\u06FF]/.test(text);
                 u.lang = isPersian ? 'fa-IR' : 'en-US';
-                
-                if (isPersian) {
-                    const voices = window.speechSynthesis.getVoices();
-                    const faVoice = voices.find(v => v.lang.includes('fa'));
-                    if (faVoice) u.voice = faVoice;
-                }
+                u.rate = 1.0; // سرعت طبیعی
 
                 u.onend = resolve;
                 u.onerror = resolve;

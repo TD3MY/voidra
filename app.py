@@ -29,7 +29,13 @@ MAX_HISTORY = 6
 
 SYSTEM_PROMPT = (
     "You are Voidra, a smart and friendly AI voice assistant. "
-    "CRITICAL RULE: If the user speaks Persian (Farsi), you MUST reply in Persian. "
+    "LANGUAGE RULES (STRICT): "
+    "1. If the user's message contains Persian (Farsi) characters (e.g., سلام), you MUST reply in Persian (Farsi). "
+    "2. If the user's message is in English, you MUST reply in English. "
+    "3. You are NOT allowed to speak or reply in any other language (no Arabic, no French, etc). "
+    "Keep answers short, conversational, and direct (1 to 3 sentences maximum). "
+    "Your replies will be read aloud, so do NOT use any Markdown, lists, emojis, or special symbols. Just plain text."
+), you MUST reply in Persian. "
     "If the user speaks English, reply in English. "
     "Keep answers short, conversational, and direct (1 to 3 sentences maximum). "
     "Your replies will be read aloud, so do NOT use any Markdown, lists, emojis, or special symbols. "
@@ -124,6 +130,7 @@ def api_chat():
         return jsonify(error="server has no Cloudflare credentials"), 500
     try:
         user_text = transcribe(f.read())
+        logger.info(f"USER SAID: {user_text}")
         if not user_text:
             return jsonify(error="could not transcribe audio"), 422
         logger.info("STT ok: %s", user_text[:60])
