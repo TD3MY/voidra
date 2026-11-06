@@ -8,7 +8,7 @@
         body {
             margin: 0;
             padding: 0;
-            background-color: #0a0a0a; /* پس زمینه تیره */
+            background-color: #0a0a0a;
             overflow: hidden;
             display: flex;
             justify-content: center;
@@ -32,38 +32,34 @@
             animation: pulseText 2s infinite;
         }
 
-        /* کانتینر صورت (مثل صفحه نمایش EMO) */
         .face-container {
             width: 250px;
             height: 200px;
             background-color: #000;
-            border-radius: 40px; /* گوشه های گرد صفحه */
-            border: 8px solid #222; /* حاشیه */
+            border-radius: 40px;
+            border: 8px solid #222;
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 30px; /* فاصله بین دو چشم */
+            gap: 30px;
             box-shadow: 0 0 50px rgba(0,255,255,0.1);
             transition: all 0.3s ease;
         }
 
-        /* هر چشم */
         .eye {
             width: 50px;
             height: 60px;
-            background-color: #00ffff; /* رنگ فیروزه ای EMO */
-            border-radius: 15px; /* گوشه های گرد چشم */
+            background-color: #00ffff;
+            border-radius: 15px;
             box-shadow: 0 0 20px #00ffff;
             transition: all 0.1s ease;
         }
 
-        /* حالت گوش دادن (چشم ها بزرگتر میشن) */
         .state-listening .eye {
             height: 70px;
             box-shadow: 0 0 30px #00ffff, 0 0 50px #00ffff;
         }
 
-        /* حالت فکر کردن (چشم ها باریک میشن) */
         .state-thinking .eye {
             height: 15px;
             margin-top: 20px;
@@ -91,52 +87,109 @@
         const eyeLeft = document.getElementById('eye-left');
         const eyeRight = document.getElementById('eye-right');
         
+        let mediaRecorder;
+        let audioChunks = [];
+        let isRecording = false;
+        let silenceTimer;
         let audioContext;
         let analyser;
-        let microphone;
-        let isListening = false;
+        let dataArray;
+        
+        // ⚠️ اینجا آدرس رندر خودت رو بذار
+        const SERVER_URL = "https://mybot2-7gxn.onrender.com/api/chat";
 
         document.getElementById('tap-screen').addEventListener('click', async () => {
             document.getElementById('tap-screen').style.display = 'none';
-            document.body.classList.add('state-listening');
-
+            
             try {
                 const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
                 analyser = audioContext.createAnalyser();
-                microphone = audioContext.createMediaStreamSource(stream);
+                const microphone = audioContext.createMediaStreamSource(stream);
                 microphone.connect(analyser);
-                
                 analyser.fftSize = 256;
-                const dataArray = new Uint8Array(analyser.frequencyBinCount);
-                
-                isListening = true;
+                dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-                function checkVolume() {
-                    if (!isListening) return;
+                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+                
+                mediaRecorder.ondataavailable = event => {
+                    audioChunks.push(event.data);
+                };
+
+                mediaRecorder.onstop = async () => {
+                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
+                    audioChunks = [];
+                    
+                    document.body.classList.add('state-thinking');
+                    document.body.classList.remove('state-listening');
+                    
+                    const formData = new FormData();
+                    formData.append('audio', audioBlob, 'voice.webm');
+                    
+                    try {
+                        const response = await fetch(SERVER_URL, {
+                            method: 'POST',
+                            body: formData
+                        });
+                        const result = await response.json();
+                        
+                        if(result.error) {
+                            alert("Error from server: " + result.error);
+                        } else {
+                            alert("You: " + result.user_text + "\n\nVoidra: " + result.bot_reply);
+                        }
+                        
+                    } catch (err) {
+                        console.error("Error sending audio:", err);
+                        alert("ارتباط با سرور برقرار نشد. اینترنت و آدرس رندر رو چک کن.");
+                    }
+                    
+                    document.body.classList.remove('state-thinking');
+                    document.body.classList.add('state-listening');
+                    startListening();
+                };
+
+                function startListening() {
+                    if (isRecording) return;
+                    audioChunks = [];
+                    mediaRecorder.start();
+                    isRecording = true;
+                    document.body.classList.add('state-listening');
+                    detectSilence();
+                }
+
+                function stopListening() {
+                    if (!isRecording) return;
+                    mediaRecorder.stop();
+                    isRecording = false;
+                    clearTimeout(silenceTimer);
+                }
+
+                function detectSilence() {
+                    if (!isRecording) return;
                     
                     analyser.getByteFrequencyData(dataArray);
                     let sum = 0;
-                    for (let i = 0; i < dataArray.length; i++) {
-                        sum += dataArray[i];
-                    }
+                    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
                     let average = sum / dataArray.length;
 
-                    // واکنش چشم ها به صدا (بزرگ و کوچیک شدن)
                     if (average > 20) {
-                        const scaleY = 1 + (average / 60); 
-                        const scaleX = 1 + (average / 200);
-                        eyeLeft.style.transform = `scale(${scaleX}, ${scaleY})`;
-                        eyeRight.style.transform = `scale(${scaleX}, ${scaleY})`;
+                        const scaleY = 1 + (average / 60);
+                        eyeLeft.style.transform = `scale(1, ${scaleY})`;
+                        eyeRight.style.transform = `scale(1, ${scaleY})`;
+                        
+                        clearTimeout(silenceTimer);
+                        silenceTimer = setTimeout(stopListening, 1500);
                     } else {
                         eyeLeft.style.transform = `scale(1)`;
                         eyeRight.style.transform = `scale(1)`;
                     }
 
-                    requestAnimationFrame(checkVolume);
+                    requestAnimationFrame(detectSilence);
                 }
+                
+                startListening();
 
-                checkVolume();
             } catch (err) {
                 console.error("Microphone access denied:", err);
                 alert("برای استفاده از این قابلیت، باید به میکروفون دسترسی بدی!");
