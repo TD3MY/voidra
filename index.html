@@ -11,6 +11,7 @@
             background-color: #0a0a0a;
             overflow: hidden;
             display: flex;
+            flex-direction: column;
             justify-content: center;
             align-items: center;
             height: 100vh;
@@ -19,8 +20,7 @@
 
         #tap-screen {
             position: absolute;
-            width: 100%;
-            height: 100%;
+            inset: 0;
             display: flex;
             justify-content: center;
             align-items: center;
@@ -30,6 +30,7 @@
             text-align: center;
             letter-spacing: 2px;
             animation: pulseText 2s infinite;
+            background: #0a0a0a;
         }
 
         .face-container {
@@ -67,6 +68,47 @@
             background-color: #ff00ff;
         }
 
+        #status {
+            margin-top: 24px;
+            color: #00ffff;
+            font-size: 14px;
+            text-align: center;
+            min-height: 20px;
+            padding: 0 16px;
+        }
+
+        #status.error { color: #ff5555; }
+
+        #chat {
+            margin-top: 12px;
+            width: min(92vw, 520px);
+            max-height: 30vh;
+            overflow-y: auto;
+            color: #ddd;
+            font-size: 15px;
+            line-height: 1.6;
+            text-align: center;
+            padding: 0 8px;
+            unicode-bidi: plaintext;
+        }
+
+        #chat .you { color: #7f8c8d; margin-bottom: 6px; }
+        #chat .bot { color: #e8ffff; }
+
+        #mute-btn {
+            position: absolute;
+            top: 14px;
+            right: 14px;
+            z-index: 20;
+            background: #111;
+            color: #00ffff;
+            border: 1px solid #222;
+            border-radius: 12px;
+            font-size: 20px;
+            padding: 6px 10px;
+            cursor: pointer;
+        }
+
         @keyframes pulseText {
             0%, 100% { opacity: 0.5; }
             50% { opacity: 1; }
@@ -76,135 +118,221 @@
 <body>
 
     <div id="tap-screen">Touch the screen to wake me up</div>
-    <div id="debug-log" style="position: absolute; bottom: 20px; left: 10px; right: 10px; color: #ff5555; font-size: 14px; z-index: 999; text-align: center;"></div>
-    <div id="debug-log" style="position: absolute; bottom: 20px; left: 10px; right: 10px; color: #ff5555; font-size: 14px; z-index: 999; text-align: center;"></div>
+    <button id="mute-btn" title="Toggle voice reply">🔊</button>
 
     <div class="face-container" id="face">
         <div class="eye" id="eye-left"></div>
         <div class="eye" id="eye-right"></div>
     </div>
 
+    <div id="status"></div>
+    <div id="chat"></div>
+
     <script>
-        function logToScreen(msg) {
-            document.getElementById("debug-log").innerText = msg;
-        }
-        const face = document.getElementById('face');
+        const SERVER_URL = "https://mybot2-7gxn.onrender.com/api/chat";
+        const HEALTH_URL = "https://mybot2-7gxn.onrender.com/";
+
+        const SPEECH_LEVEL = 20;        // volume level that counts as speech
+        const SILENCE_MS = 1500;        // silence length that ends a recording
+        const MIN_BLOB_BYTES = 3000;    // ignore recordings smaller than this
+        const REQUEST_TIMEOUT_MS = 90000; // Render free tier can take ~50s to wake up
+        const ERROR_PAUSE_MS = 4000;    // wait before listening again after an error
+
+        const body = document.body;
         const eyeLeft = document.getElementById('eye-left');
         const eyeRight = document.getElementById('eye-right');
-        
-        let mediaRecorder;
+        const statusEl = document.getElementById('status');
+        const chatEl = document.getElementById('chat');
+        const muteBtn = document.getElementById('mute-btn');
+
+        let mediaRecorder, audioContext, analyser, dataArray, stream;
         let audioChunks = [];
         let isRecording = false;
-        let silenceTimer;
-        let audioContext;
-        let analyser;
-        let dataArray;
-        
-        // ⚠️ اینجا آدرس رندر خودت رو بذار
-        const SERVER_URL = "https://mybot2-7gxn.onrender.com/api/chat";
+        let hadSpeech = false;
+        let silenceTimer = null;
+        let recMime = '';
+        let muted = false;
+
+        function setStatus(msg, isError) {
+            statusEl.textContent = msg || '';
+            statusEl.className = isError ? 'error' : '';
+        }
+
+        function setState(state) {
+            body.classList.remove('state-listening', 'state-thinking');
+            if (state) body.classList.add('state-' + state);
+        }
+
+        function showChat(userText, botReply) {
+            chatEl.innerHTML = '';
+            const u = document.createElement('div');
+            u.className = 'you';
+            u.textContent = userText;
+            const b = document.createElement('div');
+            b.className = 'bot';
+            b.textContent = botReply;
+            chatEl.appendChild(u);
+            chatEl.appendChild(b);
+        }
+
+        muteBtn.addEventListener('click', () => {
+            muted = !muted;
+            muteBtn.textContent = muted ? '🔇' : '🔊';
+            if (muted && window.speechSynthesis) window.speechSynthesis.cancel();
+        });
+
+        function pickMime() {
+            const candidates = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg'];
+            for (const m of candidates) {
+                if (window.MediaRecorder && MediaRecorder.isTypeSupported(m)) return m;
+            }
+            return '';
+        }
+
+        function speak(text) {
+            return new Promise(resolve => {
+                if (muted || !window.speechSynthesis || !text) return resolve();
+                const u = new SpeechSynthesisUtterance(text);
+                u.lang = /[\u0600-\u06FF]/.test(text) ? 'fa-IR' : 'en-US';
+                u.onend = resolve;
+                u.onerror = resolve;
+                window.speechSynthesis.cancel();
+                window.speechSynthesis.speak(u);
+            });
+        }
+
+        // Wake the Render server up (free tier sleeps when idle). Errors are ignored.
+        function wakeServer() {
+            fetch(HEALTH_URL, { mode: 'no-cors' }).catch(() => {});
+        }
+
+        function startListening() {
+            if (isRecording || !mediaRecorder) return;
+            audioChunks = [];
+            hadSpeech = false;
+            mediaRecorder.start();
+            isRecording = true;
+            setState('listening');
+            setStatus('Listening...');
+            detectSilence();
+        }
+
+        function stopListening() {
+            if (!isRecording) return;
+            isRecording = false;
+            clearTimeout(silenceTimer);
+            mediaRecorder.stop();
+        }
+
+        function detectSilence() {
+            if (!isRecording) return;
+
+            analyser.getByteFrequencyData(dataArray);
+            let sum = 0;
+            for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
+            const average = sum / dataArray.length;
+
+            if (average > SPEECH_LEVEL) {
+                hadSpeech = true;
+                const scaleY = 1 + (average / 60);
+                eyeLeft.style.transform = `scale(1, ${scaleY})`;
+                eyeRight.style.transform = `scale(1, ${scaleY})`;
+                clearTimeout(silenceTimer);
+                silenceTimer = setTimeout(stopListening, SILENCE_MS);
+            } else {
+                eyeLeft.style.transform = 'scale(1)';
+                eyeRight.style.transform = 'scale(1)';
+            }
+
+            requestAnimationFrame(detectSilence);
+        }
+
+        async function sendAudio(blob) {
+            const ext = recMime.includes('mp4') ? 'mp4' : recMime.includes('ogg') ? 'ogg' : 'webm';
+            const formData = new FormData();
+            formData.append('audio', blob, 'voice.' + ext);
+
+            const ctrl = new AbortController();
+            const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+
+            try {
+                const response = await fetch(SERVER_URL, {
+                    method: 'POST',
+                    body: formData,
+                    signal: ctrl.signal
+                });
+                clearTimeout(timer);
+
+                let result = null;
+                try { result = await response.json(); } catch (_) {}
+
+                if (!response.ok || !result || result.error) {
+                    const reason = (result && result.error) ? result.error : 'HTTP ' + response.status;
+                    throw new Error(reason);
+                }
+
+                showChat(result.user_text, result.bot_reply);
+                setStatus('');
+                await speak(result.bot_reply);
+                return true;
+            } catch (err) {
+                clearTimeout(timer);
+                console.error('Error sending audio:', err);
+                const msg = err.name === 'AbortError'
+                    ? 'Server took too long. Try again in a moment.'
+                    : 'Error: ' + err.message;
+                setStatus(msg, true);
+                return false;
+            }
+        }
+
+        async function handleRecordingStopped() {
+            const blob = new Blob(audioChunks, { type: recMime || 'audio/webm' });
+            audioChunks = [];
+
+            // Nothing useful was said: just keep listening.
+            if (!hadSpeech || blob.size < MIN_BLOB_BYTES) {
+                startListening();
+                return;
+            }
+
+            setState('thinking');
+            setStatus('Thinking...');
+            const ok = await sendAudio(blob);
+
+            if (!ok) await new Promise(r => setTimeout(r, ERROR_PAUSE_MS));
+            startListening();
+        }
 
         document.getElementById('tap-screen').addEventListener('click', async () => {
-            logToScreen('Step 1: Tapped...');
             document.getElementById('tap-screen').style.display = 'none';
-            
+            wakeServer();
+
             try {
-                logToScreen('Step 2: Asking mic...');
-                logToScreen('Step 2: Asking mic...');
-                const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                setStatus('Asking for microphone...');
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
                 audioContext = new (window.AudioContext || window.webkitAudioContext)();
+                if (audioContext.state === 'suspended') await audioContext.resume();
                 analyser = audioContext.createAnalyser();
-                const microphone = audioContext.createMediaStreamSource(stream);
-                microphone.connect(analyser);
+                audioContext.createMediaStreamSource(stream).connect(analyser);
                 analyser.fftSize = 256;
                 dataArray = new Uint8Array(analyser.frequencyBinCount);
 
-                mediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
-                
-                mediaRecorder.ondataavailable = event => {
-                    audioChunks.push(event.data);
+                recMime = pickMime();
+                mediaRecorder = new MediaRecorder(stream, recMime ? { mimeType: recMime } : undefined);
+
+                mediaRecorder.ondataavailable = e => {
+                    if (e.data && e.data.size > 0) audioChunks.push(e.data);
                 };
+                mediaRecorder.onstop = handleRecordingStopped;
 
-                mediaRecorder.onstop = async () => {
-                    const audioBlob = new Blob(audioChunks, { type: 'audio/webm' });
-                    audioChunks = [];
-                    
-                    document.body.classList.add('state-thinking');
-                    document.body.classList.remove('state-listening');
-                    
-                    alert("Recording finished. Sending to server...");
-                    logToScreen('Step 3: Sending to server...');
-                    logToScreen('Step 3: Sending to server...');
-                    const formData = new FormData();
-                    formData.append('audio', audioBlob, 'voice.webm');
-                    
-                    try {
-                        const response = await fetch(SERVER_URL, {
-                            method: 'POST',
-                            body: formData
-                        });
-                        const result = await response.json();
-                        
-                        alert("Response received from server!");
-                        if(result.error) {
-                            alert("Error from server: " + result.error);
-                        } else {
-                            alert("You: " + result.user_text + "\n\nVoidra: " + result.bot_reply);
-                        }
-                        
-                    } catch (err) {
-                        console.error("Error sending audio:", err);
-                        alert("خطای شبکه یا سرور: " + err.message);
-                    }
-                    
-                    document.body.classList.remove('state-thinking');
-                    document.body.classList.add('state-listening');
-                    startListening();
-                };
-
-                function startListening() {
-                    if (isRecording) return;
-                    audioChunks = [];
-                    mediaRecorder.start();
-                    isRecording = true;
-                    document.body.classList.add('state-listening');
-                    detectSilence();
-                }
-
-                function stopListening() {
-                    if (!isRecording) return;
-                    mediaRecorder.stop();
-                    isRecording = false;
-                    clearTimeout(silenceTimer);
-                }
-
-                function detectSilence() {
-                    if (!isRecording) return;
-                    
-                    analyser.getByteFrequencyData(dataArray);
-                    let sum = 0;
-                    for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-                    let average = sum / dataArray.length;
-
-                    if (average > 20) {
-                        const scaleY = 1 + (average / 60);
-                        eyeLeft.style.transform = `scale(1, ${scaleY})`;
-                        eyeRight.style.transform = `scale(1, ${scaleY})`;
-                        
-                        clearTimeout(silenceTimer);
-                        silenceTimer = setTimeout(stopListening, 1500);
-                    } else {
-                        eyeLeft.style.transform = `scale(1)`;
-                        eyeRight.style.transform = `scale(1)`;
-                    }
-
-                    requestAnimationFrame(detectSilence);
-                }
-                
                 startListening();
-
             } catch (err) {
-                console.error("Microphone access denied:", err);
-                alert("برای استفاده از این قابلیت، باید به میکروفون دسترسی بدی!");
+                console.error('Microphone error:', err);
+                document.getElementById('tap-screen').style.display = 'flex';
+                setStatus('', false);
+                alert('برای استفاده از این قابلیت، باید به میکروفون دسترسی بدی!');
             }
         });
     </script>
