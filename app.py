@@ -30,24 +30,16 @@ MAX_HISTORY = 6
 SYSTEM_PROMPT = (
     "You are Voidra, a smart and friendly AI voice assistant. "
     "LANGUAGE RULES (STRICT): "
-    "1. If the user's message contains Persian (Farsi) characters (e.g., سلام), you MUST reply in Persian (Farsi). "
+    "1. If the user's message is in Persian (Farsi), you MUST reply in Persian (Farsi). "
     "2. If the user's message is in English, you MUST reply in English. "
-    "3. You are NOT allowed to speak or reply in any other language (no Arabic, no French, etc). "
+    "3. Do not reply in any other language. "
     "Keep answers short, conversational, and direct (1 to 3 sentences maximum). "
     "Your replies will be read aloud, so do NOT use any Markdown, lists, emojis, or special symbols. Just plain text."
-), you MUST reply in Persian. "
-    "If the user speaks English, reply in English. "
-    "Keep answers short, conversational, and direct (1 to 3 sentences maximum). "
-    "Your replies will be read aloud, so do NOT use any Markdown, lists, emojis, or special symbols. "
-    "Just plain text."
-) because they are read aloud. "
-    "Do not use Markdown, lists, or emojis."
 )
 
 history = []  # simple shared history (personal use)
 
 app = Flask(__name__)
-
 
 @app.after_request
 def add_cors(resp):
@@ -55,7 +47,6 @@ def add_cors(resp):
     resp.headers["Access-Control-Allow-Headers"] = "Content-Type"
     resp.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
     return resp
-
 
 def cf_run(model, payload, timeout):
     """Call a Cloudflare Workers AI model, trying each account. Returns result dict or None."""
@@ -75,16 +66,13 @@ def cf_run(model, payload, timeout):
             logger.error("%s exception: %s", model, e)
     return None
 
-
 def transcribe(audio_bytes):
     result = cf_run(STT_MODEL, {"audio": base64.b64encode(audio_bytes).decode()}, STT_TIMEOUT)
     return ((result or {}).get("text") or "").strip()
 
-
 def clean(text):
     text = re.sub(r'[^\w\s\.\,\?\!\:\;\-\u0600-\u06FF]', '', text or '')
     return text.strip()
-
 
 def ask(user_text):
     history.append({"role": "user", "content": user_text})
@@ -106,18 +94,22 @@ def ask(user_text):
     return None
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+def text_to_speech(text):
+    payload = {"text": text, "lang": "fa"}
+    result = cf_run("@cf/myshell-ai/melotts", payload, 20)
+    if result and "audio" in result:
+        return result["audio"]
+    return None
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @app.route("/")
 def home():
     return send_from_directory(BASE_DIR, "index.html")
 
-
 @app.route("/health")
 def health():
     return "ok"
-
 
 @app.route("/api/chat", methods=["POST", "OPTIONS"])
 def api_chat():
@@ -133,16 +125,14 @@ def api_chat():
         logger.info(f"USER SAID: {user_text}")
         if not user_text:
             return jsonify(error="could not transcribe audio"), 422
-        logger.info("STT ok: %s", user_text[:60])
         reply = ask(user_text)
         if not reply:
             return jsonify(error="AI models not responding"), 502
-        logger.info("AI reply ready")
-        return jsonify(user_text=user_text, bot_reply=reply)
+        audio_b64 = text_to_speech(reply)
+        return jsonify(user_text=user_text, bot_reply=reply, audio=audio_b64)
     except Exception as e:
         logger.error("api_chat error: %s", e)
         return jsonify(error=str(e)), 500
-
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.getenv("PORT", 10000)))
