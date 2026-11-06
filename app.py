@@ -20,16 +20,21 @@ CF_ACCOUNTS = [a for a in CF_ACCOUNTS if a["id"] and a["token"]]
 STT_MODEL = "@cf/openai/whisper-large-v3-turbo"
 # Fast models first: a voice assistant must answer quickly.
 CHAT_MODELS = [
-    "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
     "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "@cf/meta/llama-3.1-8b-instruct",
 ]
-STT_TIMEOUT = 40
-CHAT_TIMEOUT = 25
-MAX_HISTORY = 8
+STT_TIMEOUT = 20
+CHAT_TIMEOUT = 15
+MAX_HISTORY = 6
 
 SYSTEM_PROMPT = (
-    "You are Voidra, a friendly voice assistant. Reply in the same language the user speaks. "
-    "Keep answers short (1-3 sentences) because they are read aloud. "
+    "You are Voidra, a smart and friendly AI voice assistant. "
+    "CRITICAL RULE: If the user speaks Persian (Farsi), you MUST reply in Persian. "
+    "If the user speaks English, reply in English. "
+    "Keep answers short, conversational, and direct (1 to 3 sentences maximum). "
+    "Your replies will be read aloud, so do NOT use any Markdown, lists, emojis, or special symbols. "
+    "Just plain text."
+) because they are read aloud. "
     "Do not use Markdown, lists, or emojis."
 )
 
@@ -71,7 +76,7 @@ def transcribe(audio_bytes):
 
 
 def clean(text):
-    text = re.sub(r"[`*_#>]+", "", text or "")
+    text = re.sub(r'[^\w\s\.\,\?\!\:\;\-\u0600-\u06FF]', '', text or '')
     return text.strip()
 
 
